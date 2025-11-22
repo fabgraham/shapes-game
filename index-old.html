@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Feed the Monster - A shape recognition game for children ages 4-5">
+  <title>Feed the Monster</title>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap" rel="stylesheet">
+  
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      overflow: hidden;
+      font-family: 'Fredoka One', 'Comic Sans MS', 'Arial Rounded MT Bold', sans-serif;
+      background-color: #87CEEB;
+    }
+    
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none; /* Prevent default touch behaviors */
+    }
+    
+    #errorMessage {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      padding: 40px;
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      font-family: 'Fredoka One', sans-serif;
+      color: #333;
+    }
+    
+    #errorMessage h1 {
+      font-size: 2em;
+      margin-bottom: 20px;
+      color: #FF6B6B;
+    }
+    
+    #errorMessage p {
+      font-size: 1.2em;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  
+  <div id="errorMessage">
+    <h1>Unable to start game</h1>
+    <p>Your browser may not support HTML5 Canvas.<br>Please try a modern browser like Chrome, Firefox, or Safari.</p>
+  </div>
+
+  <script>
+    // Configuration Constants
+    const CONFIG = {
+      // Physics
+      GRAVITY: 0.5,
+      BOUNCE_DAMPING: 0.6,
+      MIN_BOUNCE_VELOCITY: 0.5,
+      
+      // Interactions
+      DRAG_SCALE: 1.2,
+      HIT_PADDING: 25,
+      
+      // Layout
+      FLOOR_HEIGHT: 200,
+      MONSTER_Y_POSITION: 0.2,
+      
+      // Collision
+      COLLISION_THRESHOLD: 50,
+      
+      // Effects
+      PARTICLE_COUNT: 30,
+      PARTICLE_POOL_SIZE: 100,
+      TRANSITION_DELAY: 1500,
+      
+      // Shapes
+      SHAPE_TYPES: ['circle', 'square', 'triangle', 'star', 'rectangle'],
+      SHAPE_COLORS: {
+        circle: '#FFB3BA',
+        square: '#BAE1FF',
+        triangle: '#FFFFBA',
+        star: '#BAFFC9',
+        rectangle: '#E0BBE4'
+      },
+      
+      // Visual
+      WALL_GRADIENT_START: '#87CEEB',
+      WALL_GRADIENT_END: '#4682B4',
+      FLOOR_COLOR: '#8B4513',
+      TEXT_COLOR: '#333333',
+      
+      // Confetti colors
+      CONFETTI_COLORS: ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F']
+    };
+
+    // Game State Enumeration
+    const GameState = {
+      PLAYING: 'playing',
+      TRANSITIONING: 'transitioning',
+      PAUSED: 'paused'
+    };
+
+    // Game Class
+    class Game {
+      constructor() {
+        this.canvas = null;
+        this.ctx = null;
+        this.monster = null;
+        this.shapes = [];
+        this.particles = [];
+        this.particlePool = [];
+        this.draggedShape = null;
+        this.score = 0;
+        this.round = 0;
+        this.gameState = GameState.PLAYING;
+        this.floorY = 0;
+        this.lastFrameTime = 0;
+        this.successFlash = 0; // For screen flash effect
+        this.scoreAnimation = 0; // For score animation
+      }
+
+      init() {
+        try {
+          // Get canvas and context
+          this.canvas = document.getElementById('gameCanvas');
+          this.ctx = this.canvas.getContext('2d');
+          
+          if (!this.ctx) {
+            throw new Error('Failed to get 2D context');
+          }
+          
+          // Calculate initial layout
+          this.calculateLayout();
+          
+          // Create particle pool
+          for (let i = 0; i < CONFIG.PARTICLE_POOL_SIZE; i++) {
+            this.particlePool.push(new Particle());
+          }
+          
+          // Setup event listeners
+          this.setupEventListeners();
+          
+          // Wait for fonts to load
+          document.fonts.ready.then(() => {
+            console.log('Fonts loaded, starting game');
+            this.startNewRound();
+            this.gameLoop(performance.now());
+          }).catch((error) => {
+            console.warn('Font loading failed, continuing anyway:', error);
+            this.startNewRound();
+            this.gameLoop(performance.now());
+          });
+          
+        } catch (error) {
+          console.error('Game initialization failed:', error);
+          document.getElementById('errorMessage').style.display = 'block';
+          this.canvas.style.display = 'none';
+        }
+      }
+
+      calculateLayout() {
+        // Set canvas dimensions to match viewport
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        
+        // Calculate floor position (bottom 200px)
+        this.floorY = this.canvas.height - CONFIG.FLOOR_HEIGHT;
+      }
+
+      render() {
+        try {
+          // Clear canvas
+          this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+          
+          // Draw background and floor
+          this.drawBackground();
+          this.drawFloor();
+          
+          // Draw monster first (background layer)
+          if (this.monster) {
+            this.monster.draw(this.ctx);
+          }
+          
+          // Draw non-dragged shapes (middle layer)
+          this.shapes.forEach(shape => {
+            if (shape !== this.draggedShape) {
+              shape.draw(this.ctx);
+            }
+          });
+          
+          // Draw dragged shape last (front layer)
+          if (this.draggedShape) {
+            this.draggedShape.draw(this.ctx);
+          }
+          
+          // Draw particles (top layer)
+          this.particles.forEach(particle => {
+            if (particle.isAlive()) {
+              particle.draw(this.ctx);
+            }
+          });
+          
+          // Draw score
+          this.drawScore();
+          
+          // Draw success flash overlay
+          if (this.successFlash > 0) {
+            this.drawSuccessFlash();
+          }
+          
+        } catch (error) {
+          console.error('Rendering error:', error);
+          // Continue game loop despite error
+        }
+      }
+
+      drawBackground() {
+        // Create radial gradient from center
+        const centerX = this.canvas.width / 2;
+        const centerY = this.canvas.height / 2;
+        const radius = Math.max(this.canvas.width, this.canvas.height);
+        
+        const gradient = this.ctx.createRadialGradient(
+          centerX, centerY, 0,
+          centerX, centerY, radius
+        );
+        gradient.addColorStop(0, CONFIG.WALL_GRADIENT_START);
+        gradient.addColorStop(1, CONFIG.WALL_GRADIENT_END);
+        
+        this.ctx.fillStyle = gradient;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+      }
+
+      drawFloor() {
+        this.ctx.fillStyle = CONFIG.FLOOR_COLOR;
+        this.ctx.fillRect(0, this.floorY, this.canvas.width, CONFIG.FLOOR_HEIGHT);
+        
+        // Add subtle floor line
+        this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, this.floorY);
+        this.ctx.lineTo(this.canvas.width, this.floorY);
+        this.ctx.stroke();
+      }
+
+      drawScore() {
+        // Calculate font size based on canvas dimensions
+        const baseFontSize = Math.max(30, this.canvas.width * 0.05);
+        const fontSize = this.scoreAnimation > 0 ? baseFontSize * 1.3 : baseFontSize;
+        
+        this.ctx.font = `${fontSize}px 'Fredoka One', sans-serif`;
+        this.ctx.fillStyle = CONFIG.TEXT_COLOR;
+        this.ctx.textAlign = 'right';
+        this.ctx.textBaseline = 'top';
+        
+        // Draw score in upper right corner
+        const padding = 20;
+        const y = this.scoreAnimation > 0 ? padding - 5 : padding;
+        
+        // Add shadow for better visibility
+        this.ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        this.ctx.shadowBlur = 4;
+        this.ctx.shadowOffsetX = 2;
+        this.ctx.shadowOffsetY = 2;
+        
+        this.ctx.fillText(this.score.toString(), this.canvas.width - padding, y);
+        
+        // Reset shadow
+        this.ctx.shadowBlur = 0;
+        this.ctx.shadowOffsetX = 0;
+        this.ctx.shadowOffsetY = 0;
+      }
+
+      drawSuccessFlash() {
+        // Draw a subtle white flash overlay
+        this.ctx.fillStyle = `rgba(255, 255, 255, ${this.successFlash * 0.3})`;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Decrease flash intensity
+        this.successFlash *= 0.95;
+        if (this.successFlash < 0.01) {
+          this.successFlash = 0;
+        }
+      }
+
+      generateShapes(targetType) {
+        const shapes = [];
+        
+        // Determine count: 6-8 shapes
+        const count = 6 + Math.floor(Math.random() * 3);
+        
+        // Create array of shape types, ensuring at least one matches target
+        const shapeTypes = [targetType]; // Guarantee one target shape
+        
+        // Fill remaining slots with random types
+        for (let i = 1; i < count; i++) {
+          const randomType = CONFIG.SHAPE_TYPES[Math.floor(Math.random() * CONFIG.SHAPE_TYPES.length)];
+          shapeTypes.push(randomType);
+        }
+        
+        // Shuffle array
+        for (let i = shapeTypes.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shapeTypes[i], shapeTypes[j]] = [shapeTypes[j], shapeTypes[i]];
+        }
+        
+        // Calculate horizontal spacing to prevent overlap
+        const shapeSize = 60;
+        const spacing = shapeSize + 40; // Extra space between shapes
+        const totalWidth = count * spacing;
+        const startX = (this.canvas.width - totalWidth) / 2 + spacing / 2;
+        
+        // Create shapes at top of canvas with horizontal spacing
+        for (let i = 0; i < count; i++) {
+          const x = startX + (i * spacing);
+          const y = 0; // Top of canvas
+          const shape = new Shape(shapeTypes[i], x, y, this.floorY);
+          shapes.push(shape);
+        }
+        
+        return shapes;
+      }
+
+      startNewRound() {
+        // Increment round counter
+        this.round++;
+        
+        // Clear existing shapes
+        this.shapes = [];
+        
+        // Select random target shape type
+        const targetType = CONFIG.SHAPE_TYPES[Math.floor(Math.random() * CONFIG.SHAPE_TYPES.length)];
+        
+        // Create new monster
+        const monsterX = (this.canvas.width - 200) / 2;
+        const monsterY = this.canvas.height * CONFIG.MONSTER_Y_POSITION;
+        this.monster = new Monster(monsterX, monsterY, targetType);
+        
+        // Generate shapes
+        this.shapes = this.generateShapes(targetType);
+        
+        // Set game state to playing
+        this.gameState = GameState.PLAYING;
+        
+        // Reset dragged shape
+        this.draggedShape = null;
+        
+        console.log(`Round ${this.round} started - Target: ${targetType}`);
+      }
+
+      convertCoordinates(clientX, clientY) {
+        const rect = this.canvas.getBoundingClientRect();
+        return {
+          x: clientX - rect.left,
+          y: clientY - rect.top
+        };
+      }
+
+      handleMouseDown(event) {
+        if (this.gameState !== GameState.PLAYING) return;
+        
+        const coords = this.convertCoordinates(event.clientX, event.clientY);
+        
+        // Check if any shape was clicked (iterate backwards to check top shapes first)
+        for (let i = this.shapes.length - 1; i >= 0; i--) {
+          const shape = this.shapes[i];
+          if (shape.checkPointInside(coords.x, coords.y)) {
+            this.draggedShape = shape;
+            shape.startDrag();
+            break;
+          }
+        }
+      }
+
+      handleMouseMove(event) {
+        if (!this.draggedShape) return;
+        
+        const coords = this.convertCoordinates(event.clientX, event.clientY);
+        this.draggedShape.drag(coords.x, coords.y);
+        
+        // Update monster eyes to track dragged shape
+        if (this.monster) {
+          this.monster.updateEyes(coords.x, coords.y);
+        }
+      }
+
+      handleMouseUp(event) {
+        if (!this.draggedShape) return;
+        
+        // Check collision before dropping
+        const success = this.checkCollision(this.draggedShape);
+        
+        if (success) {
+          this.handleSuccess();
+        } else {
+          this.draggedShape.drop();
+        }
+        
+        this.draggedShape = null;
+        
+        // Reset monster eyes
+        if (this.monster) {
+          this.monster.eyeOffsetX = 0;
+          this.monster.eyeOffsetY = 0;
+        }
+      }
+
+      handleTouchStart(event) {
+        event.preventDefault(); // Prevent scrolling
+        
+        if (this.gameState !== GameState.PLAYING) return;
+        if (event.touches.length === 0) return;
+        
+        // Use only first touch point
+        const touch = event.touches[0];
+        const coords = this.convertCoordinates(touch.clientX, touch.clientY);
+        
+        // Check if any shape was touched
+        for (let i = this.shapes.length - 1; i >= 0; i--) {
+          const shape = this.shapes[i];
+          if (shape.checkPointInside(coords.x, coords.y)) {
+            this.draggedShape = shape;
+            shape.startDrag();
+            break;
+          }
+        }
+      }
+
+      handleTouchMove(event) {
+        event.preventDefault(); // Prevent scrolling
+        
+        if (!this.draggedShape) return;
+        if (event.touches.length === 0) return;
+        
+        // Use only first touch point
+        const touch = event.touches[0];
+        const coords = this.convertCoordinates(touch.clientX, touch.clientY);
+        this.draggedShape.drag(coords.x, coords.y);
+        
+        // Update monster eyes
+        if (this.monster) {
+          this.monster.updateEyes(coords.x, coords.y);
+        }
+      }
+
+      handleTouchEnd(event) {
+        event.preventDefault(); // Prevent scrolling
+        
+        if (!this.draggedShape) return;
+        
+        // Check collision before dropping
+        const success = this.checkCollision(this.draggedShape);
+        
+        if (success) {
+          this.handleSuccess();
+        } else {
+          this.draggedShape.drop();
+        }
+        
+        this.draggedShape = null;
+        
+        // Reset monster eyes
+        if (this.monster) {
+          this.monster.eyeOffsetX = 0;
+          this.monster.eyeOffsetY = 0;
+        }
+      }
+
+      checkCollision(shape) {
+        if (!shape || !this.monster) return false;
+        
+        // Check if shape type matches monster's target shape
+        if (shape.type !== this.monster.targetShape) {
+          return false;
+        }
+        
+        // Get mouth position
+        const mouth = this.monster.getMouthPosition();
+        
+        // Calculate distance between shape center and mouth
+        const dx = shape.x - mouth.x;
+        const dy = shape.y - mouth.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Check if within collision threshold
+        return distance < CONFIG.COLLISION_THRESHOLD;
+      }
+
+      handleSuccess() {
+        // Remove shape from array
+        const index = this.shapes.indexOf(this.draggedShape);
+        if (index > -1) {
+          this.shapes.splice(index, 1);
+        }
+        
+        // Increment score
+        this.score += 10;
+        
+        // Trigger visual effects
+        this.successFlash = 1.0; // Start screen flash
+        this.scoreAnimation = 30; // Start score animation
+        
+        // Get monster center position for confetti
+        const centerX = this.monster.x + this.monster.width / 2;
+        const centerY = this.monster.y + this.monster.height / 2;
+        
+        // Create enhanced confetti particles using pool
+        for (let i = 0; i < CONFIG.PARTICLE_COUNT * 1.5; i++) {
+          // Find inactive particle from pool
+          let particle = this.particlePool.find(p => !p.active);
+          
+          if (particle) {
+            // Calculate circular velocity distribution with more variety
+            const angle = (Math.PI * 2 * i) / (CONFIG.PARTICLE_COUNT * 1.5);
+            const velocity = 2 + Math.random() * 6;
+            const velocityX = Math.cos(angle) * velocity;
+            const velocityY = Math.sin(angle) * velocity - 3; // Stronger upward bias
+            
+            // Random color from confetti palette
+            const color = CONFIG.CONFETTI_COLORS[Math.floor(Math.random() * CONFIG.CONFETTI_COLORS.length)];
+            
+            // Random size with more variety
+            const size = Math.random() * 8 + 3;
+            
+            // Initialize particle
+            particle.init(centerX, centerY, velocityX, velocityY, color, size);
+            this.particles.push(particle);
+          }
+        }
+        
+        // Trigger monster happy animation
+        this.monster.playHappyAnimation();
+        
+        // Set game state to transitioning
+        this.gameState = GameState.TRANSITIONING;
+        
+        // Schedule next round
+        setTimeout(() => {
+          if (this.gameState === GameState.TRANSITIONING) {
+            this.startNewRound();
+          }
+        }, CONFIG.TRANSITION_DELAY);
+        
+        console.log(`Success! Score: ${this.score}`);
+      }
+
+      update(deltaTime) {
+        // Update all shapes
+        this.shapes.forEach(shape => shape.update(deltaTime));
+        
+        // Update all active particles
+        this.particles.forEach(particle => particle.update(deltaTime));
+        
+        // Remove dead particles and return to pool
+        this.particles = this.particles.filter(particle => {
+          if (!particle.isAlive()) {
+            particle.reset();
+            return false;
+          }
+          return true;
+        });
+        
+        // Update monster
+        if (this.monster) {
+          this.monster.update(deltaTime);
+        }
+        
+        // Update score animation
+        if (this.scoreAnimation > 0) {
+          this.scoreAnimation--;
+        }
+      }
+
+      gameLoop(timestamp) {
+        // Calculate delta time
+        const deltaTime = this.lastFrameTime ? timestamp - this.lastFrameTime : 0;
+        this.lastFrameTime = timestamp;
+        
+        // Update game state
+        this.update(deltaTime);
+        
+        // Render frame
+        this.render();
+        
+        // Continue loop
+        requestAnimationFrame(this.gameLoop.bind(this));
+      }
+
+      setupEventListeners() {
+        // Mouse events
+        this.canvas.addEventListener('mousedown', this.handleMouseDown.bind(this));
+        this.canvas.addEventListener('mousemove', this.handleMouseMove.bind(this));
+        this.canvas.addEventListener('mouseup', this.handleMouseUp.bind(this));
+        
+        // Touch events with passive: false to allow preventDefault
+        this.canvas.addEventListener('touchstart', this.handleTouchStart.bind(this), { passive: false });
+        this.canvas.addEventListener('touchmove', this.handleTouchMove.bind(this), { passive: false });
+        this.canvas.addEventListener('touchend', this.handleTouchEnd.bind(this), { passive: false });
+        
+        // Window resize with debouncing
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+          clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(() => {
+            this.calculateLayout();
+          }, 150);
+        });
+      }
+    }
+
+    // Monster Class
+    class Monster {
+      constructor(x, y, targetShape) {
+        this.x = x;
+        this.y = y;
+        this.targetShape = targetShape;
+        
+        // Size - ensure minimum 150px width for visibility
+        this.width = 200;
+        this.height = 200;
+        
+        // Random monster color (different from shape colors) - more vibrant
+        const monsterColors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57', '#FF9FF3'];
+        this.color = monsterColors[Math.floor(Math.random() * monsterColors.length)];
+        
+        // Eye tracking
+        this.eyeOffsetX = 0;
+        this.eyeOffsetY = 0;
+        
+        // Animation
+        this.isHappy = false;
+        this.animationTimer = 0;
+        this.scale = 1.0;
+        this.bounceOffset = 0;
+        this.bounceSpeed = 0;
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x + this.width / 2, this.y + this.height / 2 + this.bounceOffset);
+        ctx.scale(this.scale, this.scale);
+        
+        // Add shadow for depth
+        this.drawShadow(ctx);
+        
+        this.drawBody(ctx);
+        this.drawEyes(ctx);
+        this.drawMouth(ctx);
+        this.drawCheeks(ctx);
+        
+        if (this.isHappy) {
+          this.drawHappyEffect(ctx);
+        }
+        
+        ctx.restore();
+      }
+
+      drawShadow(ctx) {
+        // Soft shadow under monster
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+        ctx.beginPath();
+        ctx.ellipse(0, this.height * 0.4, this.width * 0.4, this.height * 0.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawBody(ctx) {
+        // Gradient fill for more appealing look
+        const gradient = ctx.createRadialGradient(0, -this.height * 0.1, 0, 0, 0, this.width * 0.5);
+        gradient.addColorStop(0, this.lightenColor(this.color, 20));
+        gradient.addColorStop(1, this.color);
+        
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = this.darkenColor(this.color, 20);
+        ctx.lineWidth = 4;
+        ctx.lineJoin = 'round';
+        
+        const size = this.width * 0.8;
+        
+        // Draw body based on target shape
+        switch (this.targetShape) {
+          case 'circle':
+            ctx.beginPath();
+            ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            break;
+            
+          case 'square':
+            const half = size / 2;
+            ctx.fillRect(-half, -half, size, size);
+            ctx.strokeRect(-half, -half, size, size);
+            break;
+            
+          case 'triangle':
+            const triHalf = size / 2;
+            ctx.beginPath();
+            ctx.moveTo(0, -triHalf);
+            ctx.lineTo(-triHalf, triHalf);
+            ctx.lineTo(triHalf, triHalf);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            break;
+            
+          case 'star':
+            const spikes = 5;
+            const outerRadius = size / 2;
+            const innerRadius = outerRadius * 0.5;
+            let rot = Math.PI / 2 * 3;
+            const step = Math.PI / spikes;
+
+            ctx.beginPath();
+            ctx.moveTo(0, -outerRadius);
+            
+            for (let i = 0; i < spikes; i++) {
+              let x = Math.cos(rot) * outerRadius;
+              let y = Math.sin(rot) * outerRadius;
+              ctx.lineTo(x, y);
+              rot += step;
+
+              x = Math.cos(rot) * innerRadius;
+              y = Math.sin(rot) * innerRadius;
+              ctx.lineTo(x, y);
+              rot += step;
+            }
+            
+            ctx.lineTo(0, -outerRadius);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            break;
+            
+          case 'rectangle':
+            const rectWidth = size;
+            const rectHeight = size * 0.6;
+            ctx.fillRect(-rectWidth / 2, -rectHeight / 2, rectWidth, rectHeight);
+            ctx.strokeRect(-rectWidth / 2, -rectHeight / 2, rectWidth, rectHeight);
+            break;
+        }
+      }
+
+      drawEyes(ctx) {
+        const eyeY = -this.height * 0.15;
+        const leftEyeX = -this.width * 0.15;
+        const rightEyeX = this.width * 0.15;
+        const eyeRadius = 18;
+        const pupilRadius = 10;
+        
+        // Eye whites with highlight
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = '#ddd';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(leftEyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+        ctx.arc(rightEyeX, eyeY, eyeRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Pupils with tracking
+        ctx.fillStyle = '#2C3E50';
+        ctx.beginPath();
+        ctx.arc(leftEyeX + this.eyeOffsetX, eyeY + this.eyeOffsetY, pupilRadius, 0, Math.PI * 2);
+        ctx.arc(rightEyeX + this.eyeOffsetX, eyeY + this.eyeOffsetY, pupilRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Pupil highlights
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.arc(leftEyeX + this.eyeOffsetX - 3, eyeY + this.eyeOffsetY - 3, 3, 0, Math.PI * 2);
+        ctx.arc(rightEyeX + this.eyeOffsetX - 3, eyeY + this.eyeOffsetY - 3, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawMouth(ctx) {
+        const mouthY = this.height * 0.2;
+        const mouthWidth = this.width * 0.35;
+        
+        ctx.strokeStyle = this.darkenColor(this.color, 40);
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
+        
+        // Draw mouth based on mood
+        ctx.beginPath();
+        if (this.isHappy) {
+          // Big happy smile
+          ctx.arc(0, mouthY - 15, mouthWidth / 2, 0.1, Math.PI - 0.1);
+        } else {
+          // Curious/hungry mouth (slight frown)
+          ctx.arc(0, mouthY + 5, mouthWidth / 2, Math.PI - 0.2, 0.2, true);
+        }
+        ctx.stroke();
+      }
+
+      drawCheeks(ctx) {
+        // Add cute blush cheeks
+        const cheekY = this.height * 0.05;
+        const leftCheekX = -this.width * 0.25;
+        const rightCheekX = this.width * 0.25;
+        const cheekRadius = this.width * 0.08;
+        
+        ctx.fillStyle = 'rgba(255, 182, 193, 0.6)'; // Light pink
+        ctx.beginPath();
+        ctx.arc(leftCheekX, cheekY, cheekRadius, 0, Math.PI * 2);
+        ctx.arc(rightCheekX, cheekY, cheekRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawHappyEffect(ctx) {
+        // Draw sparkles and hearts around monster when happy
+        const time = Date.now() / 100;
+        
+        // Golden sparkles
+        ctx.fillStyle = '#FFD700';
+        
+        for (let i = 0; i < 8; i++) {
+          const angle = (i / 8) * Math.PI * 2 + time;
+          const distance = this.width * 0.7;
+          const x = Math.cos(angle) * distance;
+          const y = Math.sin(angle) * distance;
+          const size = 6 + Math.sin(time + i) * 4;
+          
+          // Draw star shape instead of circle
+          this.drawStarParticle(ctx, x, y, size);
+        }
+        
+        // Colorful hearts
+        const heartColors = ['#FF6B6B', '#FF8E8E', '#FFA5A5'];
+        for (let i = 0; i < 5; i++) {
+          const angle = (i / 5) * Math.PI * 2 + time * 0.7;
+          const distance = this.width * 0.5;
+          const x = Math.cos(angle) * distance;
+          const y = Math.sin(angle) * distance;
+          const size = 8 + Math.sin(time * 1.2 + i) * 3;
+          
+          ctx.fillStyle = heartColors[i % heartColors.length];
+          this.drawHeartParticle(ctx, x, y, size);
+        }
+      }
+
+      drawStarParticle(ctx, x, y, size) {
+        // Draw a 5-pointed star
+        const spikes = 5;
+        const outerRadius = size;
+        const innerRadius = size * 0.4;
+        let rot = Math.PI / 2 * 3;
+        const step = Math.PI / spikes;
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.beginPath();
+        ctx.moveTo(0, -outerRadius);
+        
+        for (let i = 0; i < spikes; i++) {
+          let px = Math.cos(rot) * outerRadius;
+          let py = Math.sin(rot) * outerRadius;
+          ctx.lineTo(px, py);
+          rot += step;
+
+          px = Math.cos(rot) * innerRadius;
+          py = Math.sin(rot) * innerRadius;
+          ctx.lineTo(px, py);
+          rot += step;
+        }
+        
+        ctx.lineTo(0, -outerRadius);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      drawHeartParticle(ctx, x, y, size) {
+        // Draw a heart shape
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.beginPath();
+        
+        const topCurveHeight = size * 0.3;
+        ctx.moveTo(0, topCurveHeight);
+        
+        // Top left curve
+        ctx.bezierCurveTo(-size / 2, topCurveHeight - size / 2, -size / 2, 0, 0, 0);
+        // Top right curve  
+        ctx.bezierCurveTo(size / 2, 0, size / 2, topCurveHeight - size / 2, 0, topCurveHeight);
+        
+        // Bottom point
+        ctx.lineTo(0, size);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Color manipulation helpers
+      lightenColor(color, percent) {
+        // Convert hex to RGB, lighten, and convert back
+        const num = parseInt(color.replace("#", ""), 16);
+        const amt = Math.round(2.55 * percent);
+        const R = (num >> 16) + amt;
+        const G = (num >> 8 & 0x00FF) + amt;
+        const B = (num & 0x0000FF) + amt;
+        return "#" + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 +
+          (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 +
+          (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
+      }
+
+      darkenColor(color, percent) {
+        // Convert hex to RGB, darken, and convert back
+        const num = parseInt(color.replace("#", ""), 16);
+        const amt = Math.round(2.55 * percent);
+        const R = (num >> 16) - amt;
+        const G = (num >> 8 & 0x00FF) - amt;
+        const B = (num & 0x0000FF) - amt;
+        return "#" + (0x1000000 + (R > 255 ? 255 : R < 0 ? 0 : R) * 0x10000 +
+          (G > 255 ? 255 : G < 0 ? 0 : G) * 0x100 +
+          (B > 255 ? 255 : B < 0 ? 0 : B)).toString(16).slice(1);
+      }
+
+      updateEyes(targetX, targetY) {
+        // Calculate angle from monster center to target
+        const centerX = this.x + this.width / 2;
+        const centerY = this.y + this.height / 2;
+        
+        const dx = targetX - centerX;
+        const dy = targetY - centerY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance > 0) {
+          // Normalize and limit eye movement to max 5 pixels
+          const maxOffset = 5;
+          this.eyeOffsetX = (dx / distance) * Math.min(maxOffset, distance / 10);
+          this.eyeOffsetY = (dy / distance) * Math.min(maxOffset, distance / 10);
+        } else {
+          this.eyeOffsetX = 0;
+          this.eyeOffsetY = 0;
+        }
+      }
+
+      getMouthPosition() {
+        // Return center of mouth area for collision detection
+        return {
+          x: this.x + this.width / 2,
+          y: this.y + this.height / 2 + this.height * 0.2
+        };
+      }
+
+      playHappyAnimation() {
+        this.isHappy = true;
+        this.animationTimer = CONFIG.TRANSITION_DELAY; // 1500ms
+        this.bounceSpeed = 0.2;
+      }
+
+      update(deltaTime) {
+        // Update animation timer
+        if (this.isHappy && this.animationTimer > 0) {
+          this.animationTimer -= deltaTime;
+          
+          if (this.animationTimer <= 0) {
+            this.isHappy = false;
+            this.animationTimer = 0;
+            this.bounceSpeed = 0;
+            this.bounceOffset = 0;
+          }
+        }
+        
+        // Bounce animation when happy
+        if (this.isHappy && this.bounceSpeed > 0) {
+          this.bounceOffset = Math.sin(Date.now() / 100) * 10;
+          this.scale = 1.0 + Math.sin(Date.now() / 150) * 0.05;
+        } else {
+          this.bounceOffset = 0;
+          this.scale = 1.0;
+        }
+      }
+    }
+
+    // Shape Class
+    class Shape {
+      constructor(type, x, y, floorY) {
+        this.type = type;
+        this.x = x;
+        this.y = y;
+        this.floorY = floorY;
+        
+        // Assign color based on type
+        this.color = CONFIG.SHAPE_COLORS[type];
+        
+        // Size calculation to ensure minimum 44px touch target
+        // Base size is 60px, with HIT_PADDING of 25px on each side
+        // Effective touch target = 60 + (25 * 2) = 110px
+        this.size = 60;
+        this.originalSize = 60;
+        
+        // Interaction state
+        this.isDragging = false;
+        this.isFalling = true; // Start falling immediately
+        
+        // Physics
+        this.velocityY = 0;
+        this.scale = 1.0;
+        this.squash = 1.0;
+      }
+
+      draw(ctx) {
+        ctx.save();
+        
+        // Apply transformations
+        ctx.translate(this.x, this.y);
+        ctx.scale(this.scale, this.scale * this.squash);
+        
+        // Draw shadow first
+        this.drawShadow(ctx);
+        
+        // Draw main shape
+        switch (this.type) {
+          case 'circle':
+            this.drawCircle(ctx);
+            break;
+          case 'square':
+            this.drawSquare(ctx);
+            break;
+          case 'triangle':
+            this.drawTriangle(ctx);
+            break;
+          case 'star':
+            this.drawStar(ctx);
+            break;
+          case 'rectangle':
+            this.drawRectangle(ctx);
+            break;
+        }
+        
+        // Add highlight effect when dragging
+        if (this.isDragging) {
+          this.drawDragEffect(ctx);
+        }
+        
+        ctx.restore();
+      }
+
+      drawCircle(ctx) {
+        // Gradient for 3D effect
+        const gradient = ctx.createRadialGradient(-this.size * 0.15, -this.size * 0.15, 0, 0, 0, this.size / 2);
+        gradient.addColorStop(0, this.lightenColor(this.color, 30));
+        gradient.addColorStop(1, this.color);
+        
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = this.darkenColor(this.color, 20);
+        ctx.lineWidth = 3;
+        
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Add highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.beginPath();
+        ctx.arc(-this.size * 0.2, -this.size * 0.2, this.size * 0.15, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawSquare(ctx) {
+        // Gradient for 3D effect
+        const gradient = ctx.createLinearGradient(-this.size / 2, -this.size / 2, this.size / 2, this.size / 2);
+        gradient.addColorStop(0, this.lightenColor(this.color, 25));
+        gradient.addColorStop(1, this.color);
+        
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = this.darkenColor(this.color, 20);
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        
+        const half = this.size / 2;
+        ctx.fillRect(-half, -half, this.size, this.size);
+        ctx.strokeRect(-half, -half, this.size, this.size);
+        
+        // Add highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.fillRect(-half + 5, -half + 5, this.size * 0.3, this.size * 0.3);
+      }
+
+      drawTriangle(ctx) {
+        // Gradient for 3D effect
+        const gradient = ctx.createLinearGradient(0, -this.size / 2, 0, this.size / 2);
+        gradient.addColorStop(0, this.lightenColor(this.color, 35));
+        gradient.addColorStop(1, this.color);
+        
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = this.darkenColor(this.color, 20);
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        
+        const half = this.size / 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -half);
+        ctx.lineTo(-half, half);
+        ctx.lineTo(half, half);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        
+        // Add highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.beginPath();
+        ctx.moveTo(0, -half + 10);
+        ctx.lineTo(-half * 0.3, half * 0.3);
+        ctx.lineTo(half * 0.3, half * 0.3);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      drawStar(ctx) {
+        // Gradient for 3D effect
+        const gradient = ctx.createRadialGradient(0, -this.size * 0.2, 0, 0, 0, this.size / 2);
+        gradient.addColorStop(0, this.lightenColor(this.color, 40));
+        gradient.addColorStop(1, this.color);
+        
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = this.darkenColor(this.color, 20);
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        
+        const spikes = 5;
+        const outerRadius = this.size / 2;
+        const innerRadius = outerRadius * 0.5;
+        let rot = Math.PI / 2 * 3;
+        const step = Math.PI / spikes;
+
+        ctx.beginPath();
+        ctx.moveTo(0, -outerRadius);
+        
+        for (let i = 0; i < spikes; i++) {
+          let x = Math.cos(rot) * outerRadius;
+          let y = Math.sin(rot) * outerRadius;
+          ctx.lineTo(x, y);
+          rot += step;
+
+          x = Math.cos(rot) * innerRadius;
+          y = Math.sin(rot) * innerRadius;
+          ctx.lineTo(x, y);
+          rot += step;
+        }
+        
+        ctx.lineTo(0, -outerRadius);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        
+        // Add highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.beginPath();
+        ctx.arc(-this.size * 0.15, -this.size * 0.25, this.size * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawRectangle(ctx) {
+        // Gradient for 3D effect
+        const gradient = ctx.createLinearGradient(-this.size / 2, -this.size * 0.3, this.size / 2, this.size * 0.3);
+        gradient.addColorStop(0, this.lightenColor(this.color, 20));
+        gradient.addColorStop(1, this.color);
+        
+        ctx.fillStyle = gradient;
+        ctx.strokeStyle = this.darkenColor(this.color, 20);
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        
+        const width = this.size;
+        const height = this.size * 0.6;
+        ctx.fillRect(-width / 2, -height / 2, width, height);
+        ctx.strokeRect(-width / 2, -height / 2, width, height);
+        
+        // Add highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.fillRect(-width / 2 + 5, -height / 2 + 5, width * 0.4, height * 0.3);
+      }
+
+      checkPointInside(x, y) {
+        // Check if point is within shape bounds with HIT_PADDING for child-friendly targets
+        const effectiveSize = this.size + (CONFIG.HIT_PADDING * 2);
+        const half = effectiveSize / 2;
+        
+        return x >= this.x - half &&
+               x <= this.x + half &&
+               y >= this.y - half &&
+               y <= this.y + half;
+      }
+
+      startDrag() {
+        this.isDragging = true;
+        this.scale = CONFIG.DRAG_SCALE; // 1.2x
+        this.isFalling = false; // Pause physics
+      }
+
+      drag(x, y) {
+        this.x = x;
+        this.y = y;
+      }
+
+      drop() {
+        this.isDragging = false;
+        this.scale = 1.0;
+        
+        // Resume falling if not at floor
+        if (this.y < this.floorY) {
+          this.isFalling = true;
+        }
+      }
+
+      drawShadow(ctx) {
+        // Soft shadow under shape
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+        ctx.beginPath();
+        ctx.ellipse(2, this.size * 0.4, this.size * 0.3, this.size * 0.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawDragEffect(ctx) {
+        // Add glow effect when dragging
+        ctx.shadowColor = this.lightenColor(this.color, 50);
+        ctx.shadowBlur = 20;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+        
+        // Redraw the shape with glow
+        switch (this.type) {
+          case 'circle':
+            this.drawCircleGlow(ctx);
+            break;
+          case 'square':
+            this.drawSquareGlow(ctx);
+            break;
+          case 'triangle':
+            this.drawTriangleGlow(ctx);
+            break;
+          case 'star':
+            this.drawStarGlow(ctx);
+            break;
+          case 'rectangle':
+            this.drawRectangleGlow(ctx);
+            break;
+        }
+        
+        // Reset shadow
+        ctx.shadowBlur = 0;
+      }
+
+      drawCircleGlow(ctx) {
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size / 2 + 5, 0, Math.PI * 2);
+        ctx.fillStyle = this.lightenColor(this.color, 30);
+        ctx.globalAlpha = 0.3;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      drawSquareGlow(ctx) {
+        const half = this.size / 2 + 5;
+        ctx.fillStyle = this.lightenColor(this.color, 30);
+        ctx.globalAlpha = 0.3;
+        ctx.fillRect(-half, -half, this.size + 10, this.size + 10);
+        ctx.globalAlpha = 1;
+      }
+
+      drawTriangleGlow(ctx) {
+        const half = this.size / 2 + 5;
+        ctx.beginPath();
+        ctx.moveTo(0, -half);
+        ctx.lineTo(-half, half);
+        ctx.lineTo(half, half);
+        ctx.closePath();
+        ctx.fillStyle = this.lightenColor(this.color, 30);
+        ctx.globalAlpha = 0.3;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      drawStarGlow(ctx) {
+        const spikes = 5;
+        const outerRadius = this.size / 2 + 5;
+        const innerRadius = outerRadius * 0.5;
+        let rot = Math.PI / 2 * 3;
+        const step = Math.PI / spikes;
+
+        ctx.beginPath();
+        ctx.moveTo(0, -outerRadius);
+        
+        for (let i = 0; i < spikes; i++) {
+          let px = Math.cos(rot) * outerRadius;
+          let py = Math.sin(rot) * outerRadius;
+          ctx.lineTo(px, py);
+          rot += step;
+
+          px = Math.cos(rot) * innerRadius;
+          py = Math.sin(rot) * innerRadius;
+          ctx.lineTo(px, py);
+          rot += step;
+        }
+        
+        ctx.lineTo(0, -outerRadius);
+        ctx.closePath();
+        ctx.fillStyle = this.lightenColor(this.color, 30);
+        ctx.globalAlpha = 0.3;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      drawRectangleGlow(ctx) {
+        const width = this.size + 10;
+        const height = this.size * 0.6 + 10;
+        ctx.fillStyle = this.lightenColor(this.color, 30);
+        ctx.globalAlpha = 0.3;
+        ctx.fillRect(-width / 2, -height / 2, width, height);
+        ctx.globalAlpha = 1;
+      }
+
+      // Color manipulation helpers
+      lightenColor(color, percent) {
+        const num = parseInt(color.replace("#", ""), 16);
+        const amt = Math.round(2.55 * percent);
+        const R = (num >> 16) + amt;
+        const G = (num >> 8 & 0x00FF) + amt;
+        const B = (num & 0x0000FF) + amt;
+        return "#" + (0x1000000 + (R < 255 ? R < 1 ? 0 : R : 255) * 0x10000 +
+          (G < 255 ? G < 1 ? 0 : G : 255) * 0x100 +
+          (B < 255 ? B < 1 ? 0 : B : 255)).toString(16).slice(1);
+      }
+
+      darkenColor(color, percent) {
+        const num = parseInt(color.replace("#", ""), 16);
+        const amt = Math.round(2.55 * percent);
+        const R = (num >> 16) - amt;
+        const G = (num >> 8 & 0x00FF) - amt;
+        const B = (num & 0x0000FF) - amt;
+        return "#" + (0x1000000 + (R > 255 ? 255 : R < 0 ? 0 : R) * 0x10000 +
+          (G > 255 ? 255 : G < 0 ? 0 : G) * 0x100 +
+          (B > 255 ? 255 : B < 0 ? 0 : B)).toString(16).slice(1);
+      }
+
+      checkOverlap(other) {
+        // Check if this shape overlaps with another shape
+        const dx = this.x - other.x;
+        const dy = this.y - other.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const minDistance = (this.size + other.size) / 2;
+        
+        return distance < minDistance;
+      }
+
+      update(deltaTime) {
+        if (!this.isFalling) return;
+
+        // Apply gravity
+        this.velocityY += CONFIG.GRAVITY;
+        
+        // Update position
+        this.y += this.velocityY;
+        
+        // Check floor collision
+        if (this.y >= this.floorY) {
+          this.y = this.floorY;
+          
+          // Bounce with damping
+          if (Math.abs(this.velocityY) > CONFIG.MIN_BOUNCE_VELOCITY) {
+            this.velocityY *= -CONFIG.BOUNCE_DAMPING;
+            this.squash = 0.8; // Squash effect
+          } else {
+            // Stop bouncing
+            this.isFalling = false;
+            this.velocityY = 0;
+          }
+        }
+        
+        // Recover from squash
+        if (this.squash < 1) {
+          this.squash += 0.05;
+          if (this.squash > 1) {
+            this.squash = 1;
+          }
+        }
+      }
+    }
+
+    // Particle Class
+    class Particle {
+      constructor() {
+        this.x = 0;
+        this.y = 0;
+        this.velocityX = 0;
+        this.velocityY = 0;
+        this.color = '#FFFFFF';
+        this.size = 5;
+        this.life = 0;
+        this.maxLife = 100;
+        this.active = false;
+      }
+
+      init(x, y, velocityX, velocityY, color, size) {
+        this.x = x;
+        this.y = y;
+        this.velocityX = velocityX;
+        this.velocityY = velocityY;
+        this.color = color;
+        this.size = size;
+        this.life = 100;
+        this.maxLife = 100;
+        this.active = true;
+      }
+
+      update(deltaTime) {
+        if (!this.active) return;
+
+        // Apply gravity
+        this.velocityY += CONFIG.GRAVITY;
+        
+        // Update position
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+        
+        // Decrease life
+        this.life -= 2;
+        
+        if (this.life <= 0) {
+          this.active = false;
+        }
+      }
+
+      draw(ctx) {
+        if (!this.active) return;
+
+        // Calculate opacity based on remaining life
+        const opacity = this.life / this.maxLife;
+        
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      isAlive() {
+        return this.active && this.life > 0;
+      }
+
+      reset() {
+        this.active = false;
+        this.life = 0;
+      }
+    }
+
+    // Initialize game when DOM is ready
+    function initGame() {
+      const game = new Game();
+      game.init();
+    }
+
+    // Start when DOM is loaded
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initGame);
+    } else {
+      initGame();
+    }
+  </script>
+</body>
+</html>

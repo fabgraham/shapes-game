@@ -1,0 +1,73 @@
+/* Feed the Monster - Main Styles & Design System */
+
+:root {
+  /* Vibrant Color Palette (not generic pastels!) */
+  --color-bg-start: #00D4FF;
+  --color-bg-mid: #FF6B9D;
+  --color-bg-end: #9D4EDD;
+  --color-floor-start: #4CAF50;
+  --color-floor-end: #2E7D32;
+
+  /* Shape Colors - Bright & Bold */
+  --color-circle: #FF1493;
+  --color-square: #00BFFF;
+  --color-triangle: #FFD700;
+  --color-star: #00FF7F;
+  --color-rectangle: #9370DB;
+
+  /* UI Colors */
+  --color-text-primary: #FFFFFF;
+  --color-text-shadow: rgba(0, 0, 0, 0.4);
+  --color-glass-bg: rgba(255, 255, 255, 0.15);
+  --color-glass-border: rgba(255, 255, 255, 0.3);
+  --color-neon-glow: rgba(0, 255, 255, 0.6);
+
+  /* Typography */
+  --font-primary: 'Fredoka', 'Comic Sans MS', cursive;
+  --font-numbers: 'Paytone One', 'Fredoka', cursive;
+
+  /* Spacing */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 20px;
+  --spacing-lg: 32px;
+  --spacing-xl: 48px;
+
+  /* Animation Timings */
+  --duration-fast: 0.2s;
+  --duration-medium: 0.4s;
+  --duration-slow: 0.8s;
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Effects */
+  --blur-amount: 10px;
+  --shadow-subtle: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --shadow-strong: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  overflow: hidden;
+  font-family: var(--font-primary);
+  background: linear-gradient(135deg, var(--color-bg-start), var(--color-bg-mid), var(--color-bg-end));
+  animation: backgroundShift 30s ease infinite alternate;
+}
+
+@keyframes backgroundShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 100% 50%;
+  }
+}
+
+/* Font Loading */
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Paytone+One&display=swap');
